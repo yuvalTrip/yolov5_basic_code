@@ -55,14 +55,13 @@ from utils.torch_utils import select_device, smart_inference_mode
 @smart_inference_mode()
 def run(
         weights=ROOT / 'yolov5s.pt',  # model path or triton URL
-        source=ROOT / 'data/images',  # file/dir/URL/glob/screen/0(webcam)
+        source= ROOT / 'data/images',  # file/dir/URL/glob/screen/0(webcam)/ROOT / 'data/images'
         data=ROOT / 'data/coco128.yaml',  # dataset.yaml path
         imgsz=(640, 640),  # inference size (height, width)
         conf_thres=0.25,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
         max_det=1000,  # maximum detections per image
         device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
-        view_img=False,  # show results
         save_txt=False,  # save results to *.txt
         save_csv=False,  # save results in CSV format
         save_conf=False,  # save confidences in --save-txt labels
@@ -105,7 +104,6 @@ def run(
     # Dataloader
     bs = 1  # batch_size
     if webcam:
-        view_img = check_imshow(warn=True)
         dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
         bs = len(dataset)
     elif screenshot:
@@ -116,7 +114,10 @@ def run(
 
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
+    # Variable declaration
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
+    all_coordinates = []  # List to store bounding box coordinates
+    # Loop over dataset
     for path, im, im0s, vid_cap, s in dataset:
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
@@ -128,7 +129,7 @@ def run(
         # Inference
         with dt[1]:
             visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-            pred = model(im, augment=augment, visualize=visualize)
+            pred = model(im, augment=augment, visualize=False)
 
         # NMS
         with dt[2]:
@@ -152,6 +153,7 @@ def run(
         # Process predictions
         for i, det in enumerate(pred):  # per image
             seen += 1
+            coordinates_and_labels_for_image = []  # List to store coordinates for the current image
             if webcam:  # batch_size >= 1
                 p, im0, frame = path[i], im0s[i].copy(), dataset.count
                 s += f'{i}: '
@@ -193,19 +195,22 @@ def run(
                     if save_img or save_crop or view_img:  # Add bbox to image
                         c = int(cls)  # integer class
                         label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
+                        # This line responsible for draw the frames on the detected objects
                         annotator.box_label(xyxy, label, color=colors(c, True))
+                    # Coordinates format:  x_center, y_center, width, height
+                    #xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()
+                    # Coordinates format:   (xmin, ymin, xmax, ymax)
+                    xyxy = ((torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()
+                    line = (label, *xyxy, conf) if save_conf else (label, *xyxy)  # label format xyxy
+                    #line = (label, *xywh, conf) if save_conf else (label, *xywh)  # label format xywh
+                    printed_line = ('%s ' * len(line)).rstrip() % line
+                    coordinates_and_labels_for_image.append(printed_line)
+
                     if save_crop:
                         save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
-            # Stream results
-            im0 = annotator.result()
-            if view_img:
-                if platform.system() == 'Linux' and p not in windows:
-                    windows.append(p)
-                    cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
-                    cv2.resizeWindow(str(p), im0.shape[1], im0.shape[0])
-                cv2.imshow(str(p), im0)
-                cv2.waitKey(1)  # 1 millisecond
+                # Append the coordinates for the current image to the overall list
+                all_coordinates.append(coordinates_and_labels_for_image)
 
             # Save results (image with detections)
             if save_img:
@@ -230,6 +235,12 @@ def run(
         LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
 
     # Print results
+    # Print or process the coordinates
+    for image_idx, coordinates_and_labels_for_image in enumerate(all_coordinates):
+        print(f"Coordinates for image {image_idx + 1}:")
+        for idx, xyxy in enumerate(coordinates_and_labels_for_image):
+            print(f"  Element {idx + 1}: {xyxy}")
+        print()
     t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
     LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}' % t)
     if save_txt or save_img:
@@ -237,19 +248,19 @@ def run(
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
     if update:
         strip_optimizer(weights[0])  # update model (to fix SourceChangeWarning)
-
-
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path or triton URL')
-    parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob/screen/0(webcam)')
+    parser.add_argument('--source', type=str, default="C:\\Users\\yuval\\PycharmProjects\\yolov5 - Copy\\data\\images", help='file/dir/URL/glob/screen/0(webcam)') #changed from 0 to this
+    # C:\Users\yuval\PycharmProjects\yolov5 - Copy\data\images
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='(optional) dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--view-img', action='store_true', help='show results')
+    #parser.add_argument('--view-img', action='store_true', help='show results')
+
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--save-csv', action='store_true', help='save results in CSV format')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
@@ -258,7 +269,7 @@ def parse_opt():
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
-    parser.add_argument('--visualize', action='store_true', help='visualize features')
+    #parser.add_argument('--visualize', action='store_true', help='visualize features')
     parser.add_argument('--update', action='store_true', help='update all models')
     parser.add_argument('--project', default=ROOT / 'runs/detect', help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
